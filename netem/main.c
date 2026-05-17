@@ -37,6 +37,8 @@
 
 static volatile bool force_quit;
 
+static void print_stats(void);
+
 #define RTE_LOGTYPE_NETEM RTE_LOGTYPE_USER1
 
 #define MAX_PKT_BURST 32
