@@ -33,25 +33,12 @@ USER root
 RUN cd /home/student/dpdk && ninja -C build install && ldconfig
 
 # Setup the challenge app (done as student to ensure correct permissions)
-# USER student
-# RUN cd /home/student  && git clone https://github.com/cchenaru/keysight-challenge-2026.git challenge-app
-
-# RUN cd /home/student/challenge-app/netem && meson setup build
-
-# RUN cd /home/student/challenge-app/netem && ninja -C build
-
-
-# Setup the challenge app using LOCAL files
-USER root
-RUN mkdir -p /home/student/challenge-app/netem
-# Copiem tot folderul tău local în container
-COPY . /home/student/challenge-app/netem/
-RUN chown -R student:student /home/student/challenge-app
-
 USER student
-RUN cd /home/student/challenge-app/netem && meson setup build
-RUN cd /home/student/challenge-app/netem && ninja -C build
+RUN cd /home/student  && git clone https://github.com/Theodor-Badea/keysight-challenge-2026.git challenge-app
 
+RUN cd /home/student/challenge-app/netem && meson setup build
+
+RUN cd /home/student/challenge-app/netem && ninja -C build
 
 COPY input.pcap /home/student/input.pcap
 
