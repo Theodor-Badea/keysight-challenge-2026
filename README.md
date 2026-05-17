@@ -90,7 +90,7 @@ Packet Classification
 
 Incoming packets must be classified based on **10 hardcoded patterns**, each pattern having 12 bytes. The pattern can be anywhere inside the packet.
 
-Each packet must be routed into one of the 10 **Profile Queues (PQ)** and you must apply the drop/duplicate/delay settings of that Profile Queue.
+Each packet must be routed into one of the 10 **Profile Queues (PQ)** and you must apply the drop/duplicate/delay settings of that Profile Queue. If a packet is not matching any pattern, then that packet will be handled by the Default Profile Queue (11th Profile Queue).
 
 The classification criteria are implementation-defined, but should be deterministic and efficient.
 
