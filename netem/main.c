@@ -249,20 +249,22 @@ print_stats(void)
 	
 	// --- ADĂUGAT NOU: Afișare statistici per profil coadă ---
 	printf("\n\nQueue Profiles Breakdown ============================");
+	printf("\nQID | Received | Dropped  | Queued   | DUP Rate");
+	printf("\n----------------------------------------------------");
 	for (int i = 0; i < NUM_PROFILES; i++) {
-		if (my_queues[i].stats.total_received > 0) {
-			printf("\nQ%d -> Recv: %lu | Drop: %lu | Sent: %lu | Dup: %lu",
-				   i, 
-				   my_queues[i].stats.total_received,
-				   my_queues[i].stats.total_dropped,
-				   my_queues[i].stats.total_sent,
-				   my_queues[i].stats.total_duplicated);
+		uint64_t recv = __atomic_load_n(&my_queues[i].stats.total_received, __ATOMIC_RELAXED);
+		if (recv > 0) {
+			uint64_t drop = __atomic_load_n(&my_queues[i].stats.total_dropped, __ATOMIC_RELAXED);
+			uint64_t sent = __atomic_load_n(&my_queues[i].stats.total_sent, __ATOMIC_RELAXED);
+			printf("\nQ%-2d | %8"PRIu64" | %8"PRIu64" | %8"PRIu64" | %d/10",
+				   i, recv, drop, sent, my_queues[i].dup_rate);
 		}
 	}
 
 	printf("\n====================================================\n");
 	fflush(stdout);
 }
+
 
 /* Modificare în inima loop-ului principal */
 static void

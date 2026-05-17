@@ -93,6 +93,9 @@ int classify_packet(struct rte_mbuf *m) {
 	struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 	if (rte_be_to_cpu_16(eth_hdr->ether_type) != RTE_ETHER_TYPE_IPV4) return -1;
 
+	// Verificăm lungimea minimă pentru IPv4
+	if (m->data_len < sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr)) return -1;
+
 	struct rte_ipv4_hdr *ipv4_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
 	uint32_t ip_dst = rte_be_to_cpu_32(ipv4_hdr->dst_addr);
 	int ip_is_even = (ip_dst % 2 == 0);
@@ -100,8 +103,10 @@ int classify_packet(struct rte_mbuf *m) {
 	uint16_t dst_port = 0;
 
 	if (proto == IPPROTO_TCP) {
-		struct rte_tcp_hdr *tcp_hdr = (struct rte_tcp_hdr *)((unsigned char *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
+		if (m->data_len < sizeof(struct rte_ether_hdr) + (ipv4_hdr->version_ihl & 0x0f) * 4 + sizeof(struct rte_tcp_hdr)) return 4;
+		struct rte_tcp_hdr *tcp_hdr = (struct rte_tcp_hdr *)((unsigned char *)ipv4_hdr + (ipv4_hdr->version_ihl & 0x0f) * 4);
 		dst_port = rte_be_to_cpu_16(tcp_hdr->dst_port);
+		
 		if (dst_port == 80) return 0;
 		if (dst_port == 443) return 1;
 		if (dst_port == 22) return 2;
@@ -111,60 +116,61 @@ int classify_packet(struct rte_mbuf *m) {
 		if (!ip_is_even && !port_is_even) return 6;
 		if (ip_is_even && !port_is_even) return 7;
 		if (ip_is_even && port_is_even) return 4;
+		return 8; // Fallback TCP
 	} else if (proto == IPPROTO_UDP) {
-		struct rte_udp_hdr *udp_hdr = (struct rte_udp_hdr *)((unsigned char *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
+		if (m->data_len < sizeof(struct rte_ether_hdr) + (ipv4_hdr->version_ihl & 0x0f) * 4 + sizeof(struct rte_udp_hdr)) return 3;
+		struct rte_udp_hdr *udp_hdr = (struct rte_udp_hdr *)((unsigned char *)ipv4_hdr + (ipv4_hdr->version_ihl & 0x0f) * 4);
 		dst_port = rte_be_to_cpu_16(udp_hdr->dst_port);
+		
+		if (dst_port == 53) return 9;
+
 		int port_is_even = (dst_port % 2 == 0);
 		if (!ip_is_even && port_is_even) return 3;
 		if (ip_is_even && !port_is_even) return 5;
-		if (ip_is_even && port_is_even) return 10; // Q10 conform logicii tale
+		if (ip_is_even && port_is_even) return 0; // Evităm Q10
+		return 1; // Fallback UDP
 	}
-	return -1;
+	
+	// Default pentru alte protocoale IPv4 (ICMP, etc)
+	return ip_is_even ? 4 : 6;
 }
 
 void apply_changes(struct rte_mbuf *m, int queue_id, uint16_t tx_port_id) {
 	uint64_t now = rte_rdtsc();
 	
 	if (queue_id < 0 || queue_id >= NUM_PROFILES) {
-		// Daca pachetul nu are profil, il punem in heap sa iasa instant (0 delay)
 		heap_push(tx_port_id, m, now, tx_port_id);
 		return;
 	}
 
 	profile_queue *q = &my_queues[queue_id];
-	q->stats.total_received++;
-	q->pkt_count++;
+	
+	// Folosim operații atomice pentru că statisticile sunt partajate între lcore-uri
+	__atomic_fetch_add(&q->stats.total_received, 1, __ATOMIC_RELAXED);
+	
+	// pkt_count e folosit pentru drop_rate, îl incrementăm atomic
+	uint64_t current_pkt_idx = __atomic_fetch_add(&q->pkt_count, 1, __ATOMIC_RELAXED);
 
 	// 1. Logica de DROP
-	if (q->drop_rate > 0 && (q->pkt_count % q->drop_rate == 0)) {
+	if (q->drop_rate > 0 && ((current_pkt_idx + 1) % q->drop_rate == 0)) {
 		rte_pktmbuf_free(m);
-		q->stats.total_dropped++;
+		__atomic_fetch_add(&q->stats.total_dropped, 1, __ATOMIC_RELAXED);
 		return;
 	}
 
-	// 2. Logica de DUP (Duplicare)
-	int send_count = 1;
-	if (q->dup_rate > 0 && ((q->pkt_count % 10) < q->dup_rate)) {
-		send_count = 2;
-		q->stats.total_duplicated++;
+	// 2. Logica de DUP - Dezactivată conform cerinței (păstrăm doar structura)
+	// (nu mai duplicăm pachetele aici)
+
+	// 3. Logica de DELAY
+	uint64_t delay_ms = q->min_delay;
+	if (q->max_delay > q->min_delay) {
+		delay_ms += rte_rand() % (q->max_delay - q->min_delay + 1);
 	}
 
-	// 3. Logica de DELAY (Calculare timestamp + Inserare in Heap)
-	for (int i = 0; i < send_count; i++) {
-		struct rte_mbuf *pkt_to_buffer = m;
-		if (i > 0) {
-			rte_mbuf_refcnt_update(m, 1); // Crestem ref count pentru clona
-		}
+	uint64_t delay_cycles = (delay_ms * rte_get_tsc_hz()) / 1000;
+	uint64_t scheduled_send_time = now + delay_cycles;
 
-		uint64_t delay_ms = q->min_delay;
-		if (q->max_delay > q->min_delay) {
-			delay_ms += rte_rand() % (q->max_delay - q->min_delay + 1);
-		}
-
-		uint64_t delay_cycles = (delay_ms * rte_get_tsc_hz()) / 1000;
-		uint64_t scheduled_send_time = now + delay_cycles;
-
-		heap_push(tx_port_id, pkt_to_buffer, scheduled_send_time, tx_port_id);
-		q->stats.total_sent++;
-	}
+	heap_push(tx_port_id, m, scheduled_send_time, tx_port_id);
+	__atomic_fetch_add(&q->stats.total_sent, 1, __ATOMIC_RELAXED);
 }
+
