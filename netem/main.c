@@ -202,7 +202,7 @@ netem_main_loop(void)
 
 			/* Drop one in 10 packets, the 5th one. */
 			if (i % 10 == 5) {
-				/* ToDo: correctly drop based on total RX packets, not
+				/* TODO: correctly drop based on total RX packets, not
 				 * while iterating the burst (e.g. 32 packets burst)
 				 */
 				rte_pktmbuf_free(m);
@@ -298,6 +298,7 @@ main(int argc, char **argv)
 		if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+
 		/* Configure the number of queues for a port. */
 		ret = rte_eth_dev_configure(portid, 1, 1, &local_port_conf);
 		if (ret < 0)
